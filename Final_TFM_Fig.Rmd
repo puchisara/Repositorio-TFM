@@ -1,0 +1,767 @@
+---
+title: "TFM"
+output: html_document
+date: "2023-07-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(GISAIDR)
+library(outbreakinfo)
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(scales)
+
+```
+
+```{r TASA DE CAMBIOS, echo=FALSE}
+
+ponde <- ponde2 %>%
+  filter(FINAL == TRUE) %>%
+  select("Secuencia 1",	"Secuencia 2",	"PATIENT_ID", "DAY", "TTO", "Distancia_ponderada")
+
+ponde$Dias <- ifelse(ponde$DAY == "0-7", 7, ifelse(ponde$DAY == "0-28", 28, 21))
+
+ponde$division <- ponde$Distancia_ponderada / ponde$Dias
+
+ponde <- ponde %>%
+  group_by(PATIENT_ID) %>%
+  mutate(Distancia_acumulada = ifelse(Dias == 7, Distancia_ponderada,
+                                ifelse(Dias == 28, Distancia_ponderada,
+                                       ifelse(Dias == 21 & any(Dias == 7), Distancia_ponderada + sum(Distancia_ponderada[Dias == 7]), Distancia_ponderada))))
+
+ponde <- ponde %>%
+  mutate(division_acumuladas = ifelse(Dias == 7, Distancia_acumulada / 7,
+                                     ifelse(Dias == 28, Distancia_acumulada / 28,
+                                            ifelse(Dias == 21 & !any(Dias == 7), Distancia_acumulada / 21,
+                                                   ifelse(Dias == 21 & any(Dias == 7), Distancia_acumulada / 28, NA)))))
+
+# Crear el nuevo dataframe agregando las columnas requeridas por paciente
+nuevo_ponde <- ponde %>%
+  group_by(PATIENT_ID, TTO) %>%
+  summarize(mut_7_dias = ifelse(any(Dias == 7), division[Dias == 7], NA),
+            mut_21_dias = ifelse(any(Dias == 21), division[Dias == 21], NA),
+            mut_0_28_dias = ifelse(any(Dias == 28), division[Dias == 28], NA),
+            mut_sum_0_7_28_dias = ifelse(any(Dias == 21 & any(Dias == 7)), division_acumuladas[Dias == 21 & any(Dias == 7)], NA))
+
+```
+
+```{r FIGURA 6B, echo=FALSE}
+Tabla_P2 <- Tabla_P %>%
+  select(NUMBER_SAMPLES_PATIENT, VARIANT_WHO, PATIENT_ID, TTO, DAY_SAMPLE) %>%
+  group_by(PATIENT_ID) %>%
+  arrange(DAY_SAMPLE) %>%
+  summarise(VARIANT_WHO = paste(VARIANT_WHO, collapse = "/"),
+            TTO = first(TTO),
+            NUMBER_SAMPLES_PATIENT = first(NUMBER_SAMPLES_PATIENT))
+
+
+Tabla_P2$VARIANT_WHO2 <- ifelse(Tabla_P2$VARIANT_WHO == "unassigned/unassigned" | Tabla_P2$VARIANT_WHO == "unassigned/unassigned/unassigned", "unassigned",
+                                   ifelse(Tabla_P2$VARIANT_WHO == "Alpha/Alpha" | Tabla_P2$VARIANT_WHO == "Alpha/Alpha/Alpha", "Alpha",
+                                          ifelse(Tabla_P2$VARIANT_WHO == "20E/20E" | Tabla_P2$VARIANT_WHO == "20E/20E/20E", "20E",
+                                                 ifelse(Tabla_P2$VARIANT_WHO == "Gamma/Gamma" | Tabla_P2$VARIANT_WHO == "Gamma/Gamma/Gamma", "Gamma",
+                                                        ifelse(Tabla_P2$VARIANT_WHO == "Delta/Delta" | Tabla_P2$VARIANT_WHO == "Delta/Delta/Delta", "Delta",
+                                                                                           Tabla_P2$VARIANT_WHO)))))
+
+
+datos_agregados <- Tabla_P2 %>%
+  filter (NUMBER_SAMPLES_PATIENT >=2) %>%
+  group_by(VARIANT_WHO2, TTO) %>%
+  summarize(Cantidad_Pacientes = n_distinct(PATIENT_ID)) 
+
+ggplot(datos_agregados, aes(x = Cantidad_Pacientes, y = VARIANT_WHO2, fill = TTO)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  theme_bw() +
+  labs(x = "Número de pacientes", y = "Variante", fill = "Tratamiento") +
+  geom_text(aes(label = Cantidad_Pacientes), position = position_dodge(width = 0.9), hjust = -0.35, size = 2.5) +
+  theme(
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    axis.text.x = element_text(size = 14),
+    axis.title.x = element_text(size = 14, margin = margin(t = 10)),
+    axis.text.y = element_text(size = 12),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  coord_cartesian(xlim = c(0, max(datos_agregados$Cantidad_Pacientes) * 1.1))
+
+```
+
+```{r FIGURA 7A, echo=FALSE}
+data <- read.csv("2_downloadedmetadata_2023-02-12.tsv",sep="\t", fileEncoding = "UTF-8", stringsAsFactors=FALSE)
+
+data$date <- as.Date(data$date)
+
+superdata_omicron <- data %>%
+  filter(date >= as.Date("2020-11-01") & 
+           date <= as.Date("2021-07-31") & 
+           (Variant %in% c("Alpha", "Beta", "Delta", "Gamma", "20E", "Other", "Recombinant")))
+
+superdata_omicron$month_year <- format(superdata_omicron$date, "%Y-%m")
+
+monthly_dato_omicron<- superdata_omicron %>%
+  group_by(month_year, Variant) %>%
+  summarise(count = sum(n())) %>%
+  ungroup()
+
+
+monthly_dato_omicron<- monthly_dato_omicron%>%
+  group_by(month_year) %>%
+  mutate(percent = count / sum(count))
+
+
+monthly_dato_omicron<- drop_na(monthly_dato_omicron)
+
+# Convertir la variable month_year en fecha
+monthly_dato_omicron$month_year <- as.Date(paste0(monthly_dato_omicron$month_year, "-01"), format = "%Y-%m-%d")
+
+par(mar = c(4, 4, 0.5, 0.5))
+
+x_limits <- c(as.Date("2020-11-01"), as.Date("2021-07-01"))
+
+
+ggplot(monthly_dato_omicron, aes(x = month_year, y = percent, fill = Variant)) +
+  geom_bar(stat = "identity")+ 
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+       x = "Fecha",
+       y = "Porcentaje",
+       fill = "Variante",
+       title = "Porcentaje de variantes en España") +
+  theme_bw() + 
+   scale_fill_manual(values = c("20E" = "#5fbfe0", "Alpha" = "#cab8d2", "Delta"="#e39a81", "Omicron" = "#fff0a2", "Other" = "#505050", "Recombinant" = "#a9c4e2", "Gamma" = "#b2d4c9", "Beta" = "#dfd9c4", "Mu" = "#fabb17", "Eta" = "#ae3e63", "Kappa" = "#de6a99", "Epsilon" = "#f46e16", "Lambda" = "#94221e", "Iota" = "#ffaebd"), labels = c("Alpha" = "Alpha", "20E" = "20E", "Delta" = "Delta", "Other" = "Otros", "Recombinant" = "Recomb."))+
+  theme(
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5)),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) + 
+       scale_x_date(limits= x_limits, date_breaks="2 months", date_labels="%b %Y") 
+
+```
+
+```{r FIGURA 7B, echo=FALSE}
+metadata_omicron <- data[data$community == "Cataluña" & 
+                  data$date >= as.Date("2020-11-01") & 
+                  data$date <= as.Date("2021-07-31") & 
+                  data$Variant %in% c("Alpha", "Beta", "Delta", "Gamma", "20E", "Other"),]
+
+metadata_omicron$month_year <- format(metadata_omicron$date, "%Y-%m")
+
+monthly_data_omicron<- metadata_omicron %>%
+  group_by(month_year, Variant) %>%
+  summarise(count = sum(n())) %>%
+  ungroup()
+
+
+monthly_data_omicron<- monthly_data_omicron%>%
+  group_by(month_year) %>%
+  mutate(percent = count / sum(count))
+
+
+monthly_data_omicron<- drop_na(monthly_data_omicron)
+
+# Convertir la variable month_year en fecha
+monthly_data_omicron$month_year <- as.Date(paste0(monthly_data_omicron$month_year, "-01"), format = "%Y-%m-%d")
+
+par(mar = c(4, 4, 0.5, 0.5))
+
+x_limits <- c(as.Date("2020-11-01"), as.Date("2021-07-01"))
+
+
+ggplot(monthly_data_omicron, aes(x = month_year, y = percent, fill = Variant)) +
+  geom_bar(stat = "identity")+ 
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+       x = "Fecha",
+       y = "Porcentaje",
+       fill = "Variante",
+       title = "Porcentaje de variantes en Cataluña") +
+  theme_bw() + 
+   scale_fill_manual(values = c("20E" = "#5fbfe0", "Alpha" = "#cab8d2", "Delta"="#e39a81", "Omicron" = "#fff0a2", "Other" = "#505050", "Recombinant" = "#a9c4e2", "Gamma" = "#b2d4c9", "Beta" = "#dfd9c4", "Mu" = "#fabb17", "Eta" = "#ae3e63", "Kappa" = "#de6a99", "Epsilon" = "#f46e16", "Lambda" = "#94221e", "Iota" = "#ffaebd"), labels = c("Alpha" = "Alpha", "20E" = "20E", "Delta" = "Delta", "Other" = "Otros", "Recombinant" = "Recombinante"))+
+  theme(
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5)),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) + 
+       scale_x_date(limits= x_limits, date_breaks="2 months", date_labels="%b %Y") 
+
+```
+
+```{r FIGURA 8A, echo=FALSE}
+
+plot1$todo <- ifelse(!is.na(plot1$mut_sum_0_7_28_dias), plot1$mut_sum_0_7_28_dias,
+                     ifelse(!is.na(plot1$mut_0_28_dias), plot1$mut_0_28_dias,
+                           ifelse(!is.na(plot1$mut_21_dias), plot1$mut_21_dias, plot1$mut_7_dias)))
+
+
+placebo <- sum(plot1$TTO == "placebo" & !is.na(plot1$todo))
+plasma <- sum(plot1$TTO == "plasma" & !is.na(plot1$todo))
+
+plasma2 <- filter(plot1, TTO == "plasma")
+placebo2 <- filter(plot1, TTO == "placebo")
+wilcox3 <- wilcox.test(plasma2$todo, placebo2$todo)
+rounded_p_value4 <- round(wilcox3$p.value, 3)
+
+t <- ggplot(plot1, aes(x = TTO, y = todo, fill = TTO)) +
+  geom_boxplot() +
+  labs(x = "Tratamiento utilizado", y = "Distancias ponderadas por día", fill = "") +
+  theme_bw() +
+  theme(legend.position = "top", legend.justification = "right", 
+        legend.text = element_text(size = 14),
+        axis.text.x = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+        plot.title = element_text(margin = margin(t = 0.5, b = 10), size = 14),
+        plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")) +
+  labs(title = "Distancia ponderada/Dia según el tipo de tratamiento") +
+  geom_text(x = 0.64, y = 1.25, label = paste("p_value =", rounded_p_value4), size = 3.5)
+
+etiquetas <- c("plasma" = "Plasma", "placebo" = "Placebo")
+
+leyenda_etiquetas <- c("plasma" = paste("n =", plasma), "placebo" = paste("n =", placebo))
+
+t <- t + 
+  scale_fill_manual(values = c("plasma" = "#FFBA64", "placebo" = "#C864FF"), labels = leyenda_etiquetas) +
+  scale_x_discrete(labels = etiquetas)
+
+```
+
+```{r FIGURA 8B, echo=FALSE}
+
+tto_tasa_comb3 <- merge(mut_SNP, mut_Indel, by = "PATIENT_ID", all = TRUE)
+
+tto_tasa_comb3$todo.x <- ifelse(!is.na(tto_tasa_comb3$mut_sum_0_7_28_dias.x), tto_tasa_comb3$mut_sum_0_7_28_dias.x,
+                     ifelse(!is.na(tto_tasa_comb3$mut_0_28_dias.x), tto_tasa_comb3$mut_0_28_dias.x,
+                           ifelse(!is.na(tto_tasa_comb3$mut_21_dias.x), tto_tasa_comb3$mut_21_dias.x, tto_tasa_comb3$mut_7_dias.x)))
+
+
+tto_tasa_comb3$todo.y <- ifelse(!is.na(tto_tasa_comb3$mut_sum_0_7_28_dias.y), tto_tasa_comb3$mut_sum_0_7_28_dias.y,
+                     ifelse(!is.na(tto_tasa_comb3$mut_0_28_dias.y), tto_tasa_comb3$mut_0_28_dias.y,
+                           ifelse(!is.na(tto_tasa_comb3$mut_21_dias.y), tto_tasa_comb3$mut_21_dias.y, tto_tasa_comb3$mut_7_dias.y)))
+
+tto_tasa_comb3$has_both <- ifelse(!is.na(tto_tasa_comb3$todo.x) & !is.na(tto_tasa_comb3$todo.y), "Yes", "No")
+
+rownames(tto_tasa_comb3) <- NULL
+
+num_obs_snp <- sum(!is.na(tto_tasa_comb3$todo.x))
+num_obs_inde <- sum(!is.na(tto_tasa_comb3$todo.y))
+
+wilcox6 <- wilcox.test(tto_tasa_comb3$todo.x, tto_tasa_comb3$todo.y)
+p_value6 <- wilcox6$p.value
+rounded_p_value6 <- sprintf("%.3e", p_value6)
+
+ggplot(tto_tasa_comb3, aes(x = "Indels", y = todo.y, fill = paste("n =", num_obs_inde))) +
+  geom_boxplot() +
+  geom_boxplot(aes(x = "SNPs", y = todo.x, fill = paste("n =", num_obs_snp))) + 
+  labs(x = "Tipo de mutación", y = "Distancia ponderada por día", fill = "") +
+  theme_bw()+
+  theme(legend.position = "top", legend.justification = "right", 
+        legend.text = element_text(size = 12),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 14),
+        axis.title.y = element_text(size = 14, margin = margin(r = 20)),
+        plot.title = element_text(margin = margin(t = 0.5, b = 20), size = 14),
+        plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"))  + 
+  labs(title = "Distancia ponderada/Día según el tipo de mutación") +
+  geom_text(x = 0.75, y = 1.25, label = paste("p_value =", rounded_p_value6),  size = 3.5)
+
+```
+
+```{r FIGURA 9, echo=FALSE}
+
+suma_mutaciones_por_paciente <- no_mask12 %>%
+  group_by(PATIENT_ID, region) %>%
+  summarise(Suma_Distancias = sum(`Distancia_0-7`, `Distancia_7-28`, `Distancia_0-28`, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(Suma_Distancias = case_when(
+    region == "ORF1ab" ~ Suma_Distancias / 21289,
+    region == "S" ~ Suma_Distancias / 3821,
+    region == "ORF3a" ~ Suma_Distancias / 827,
+     region == "E" ~ Suma_Distancias / 227,
+     region == "M" ~ Suma_Distancias / 668,
+     region == "ORF6" ~ Suma_Distancias / 185,
+     region == "ORF7a" ~ Suma_Distancias / 365,
+     region == "ORF7b" ~ Suma_Distancias / 131,
+     region == "ORF8" ~ Suma_Distancias / 365,
+     region == "N" ~ Suma_Distancias / 1259,
+     region == "ORF10" ~ Suma_Distancias / 116,
+     region == "Intergenica" ~ Suma_Distancias / 390,
+    TRUE ~ Suma_Distancias  # Si no se cumple ninguna condición, mantén el valor sin dividir
+  ))
+
+orden_region3 <- c("ORF1ab", "S", "ORF3a", "E", "M","ORF6", "ORF7a", "ORF7b", "ORF8", "N", "ORF10", "Intergenica")
+
+suma_mutaciones_por_paciente$region <- factor(suma_mutaciones_por_paciente$region, levels = orden_region3)
+
+media_por_region <- suma_mutaciones_por_paciente %>%
+  group_by(region) %>%
+  summarise(Media_Suma_Distancias = mean(Suma_Distancias))
+
+# Fusionar resultados con el data frame original
+suma_mutaciones_por_paciente <- merge(suma_mutaciones_por_paciente, media_por_region, by = "region")
+
+# Crear el gráfico con el orden específico de las regiones
+ggplot(subset(suma_mutaciones_por_paciente, Suma_Distancias <= 0.002), aes(x = region, y = Suma_Distancias, fill = region)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(color = "grey") +
+  geom_point(aes(x = region, y = Media_Suma_Distancias), shape = "square", color = "red", size = 1.5) +
+  labs(x = "Región del genoma", y = "Distancias ponderadas", fill = "Genotipo") +
+  theme_bw() +
+  theme(
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 18),
+    axis.text.x = element_text(size = 16, angle= 45, hjust = 1),
+    axis.title.x = element_text(size = 18, margin = margin(t = 15, b = 0.5)),
+    axis.text.y = element_text(size = 16),
+    axis.title.y = element_text(size = 18, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 18),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  labs(title = "Distancias ponderadas según la región del genoma") +
+  scale_fill_manual(
+    values = c(
+      "ORF1ab" = "#148F77",
+      "ORF6" = "#da7b72",
+      "E" = "black",
+      "S" = "#6C0D0D",
+      "M" = "#AA70C2",
+      "N" = "#76448A",
+      "ORF10" = "#1A237E",
+      "ORF3a" = "#1B5E20",
+      "ORF7a" = "#DE8A00",
+      "ORF7b" = "#FBC02D",
+      "ORF8" = "#B03A2E",
+      "Intergenica" = "lightblue"
+    )
+  )
+
+```
+
+```{r FIGURA 10A, echo=FALSE}
+
+df_sorted9 <- no_mask12 %>%
+  arrange(POS) %>%
+  group_by(POS, ALT, region) %>%
+  summarise(Suma_Distancias = sum(`Distancia_0-7`, `Distancia_7-28`, `Distancia_0-28`, na.rm = TRUE), .groups = 'drop')
+
+window_size <- 1000
+total_pos <- 31000
+
+# Listas para almacenar los resultados
+window_pos9 <- vector("numeric")
+mutation_counts9 <- vector("numeric")
+regions9 <- vector("character")
+
+for (i in 1:(total_pos - window_size + 1)) {
+  start9 <- i
+  end9 <- i + window_size - 1
+  
+  df_window9 <- df_sorted9 %>% 
+    filter(POS >= start9 & POS <= end9)
+  
+  cant_pond9 <- df_window9 %>%
+    distinct(POS, ALT) %>%
+    summarize(Suma_Distancias = sum(df_window9$Suma_Distancias))
+    
+  if (nrow(cant_pond9) > 0) {
+    window_pos9 <- c(window_pos9, start9)
+    mutation_counts9 <- c(mutation_counts9, cant_pond9$Suma_Distancias)
+    regions9 <- c(regions9, unique(df_window9$region[1]))
+  }
+}
+
+# Crear un DataFrame con los resultados
+results9 <- data.frame(WindowPOS9 = window_pos9,
+                       MutationCount9 = (mutation_counts9/100),
+                       Region9 = regions9)
+
+
+
+orden_region4 <- c("ORF1ab", "S", "ORF3a", "E", "M", "ORF6", "ORF7a", "ORF7b", "ORF8", "N", "ORF10", "Intergenica")
+
+results9$Region9 <- factor(results9$Region9, levels = orden_region4)
+
+
+posiciones_destacadas <- c(266, 805, 2720, 8555, 10055, 10973, 11843, 12092, 12686, 13025, 13442, 13469, 16237, 18040, 19621, 20659, 21563, 21867, 22097, 22797)
+
+# Filtrar el dataframe no_mask para incluir solo las posiciones destacadas
+no_mask_destacadas1 <- results9 %>% filter(WindowPOS9 %in% posiciones_destacadas)
+
+ggplot(results9, aes(x = WindowPOS9, y = MutationCount9 / 1000, color = Region9)) +
+  geom_point(alpha = 0.5) +
+  geom_line(color = "lightgrey") +
+  labs(x = "Posición", y = "Frecuencia de distancias\n ponderadas diferentes", color = "Region") +
+  ggtitle("Frecuencia de distancias ponderadas diferentes en todos los pacientes") +
+  theme_bw() +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = c("ORF1ab" = "#148F77", "ORF6" = "#da7b72", "E" = "#C4C4C4", "S" = "#F3A6A0", "M" = "#AA70C2", "N" = "#76448A", "ORF10" = "#8C9AD6", "ORF3a" = "#7EB28F", "ORF7a" = "#F9C185", "ORF7b" = "#FDD899", "ORF8" = "#B03A2E", "Intergenica" = "#A2DED0")) +
+  geom_vline(data = no_mask_destacadas1, aes(xintercept = WindowPOS9), linetype = "dashed", color = "blue") +
+  theme(
+    legend.text = element_text(size = 10),
+    legend.position = "bottom", 
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5), vjust = 1),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"),
+    plot.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0, 0.00025))
+
+```
+
+```{r FIGURA 10B, echo=FALSE}
+
+df_sorted9 <- no_mask12 %>%
+  arrange(POS) %>%
+  filter(TTO == "placebo") %>%
+  group_by(POS, ALT, region) %>%
+  summarise(Suma_Distancias = sum(`Distancia_0-7`, `Distancia_7-28`, `Distancia_0-28`, na.rm = TRUE), .groups = 'drop')
+
+window_size <- 1000
+total_pos <- 31000
+
+# Listas para almacenar los resultados
+window_pos9 <- vector("numeric")
+mutation_counts9 <- vector("numeric")
+regions9 <- vector("character")
+
+for (i in 1:(total_pos - window_size + 1)) {
+  start9 <- i
+  end9 <- i + window_size - 1
+  
+  df_window9 <- df_sorted9 %>% 
+    filter(POS >= start9 & POS <= end9)
+  
+  cant_pond9 <- df_window9 %>%
+    distinct(POS, ALT) %>%
+    summarize(Suma_Distancias = sum(df_window9$Suma_Distancias))
+    
+  if (nrow(cant_pond9) > 0) {
+    window_pos9 <- c(window_pos9, start9)
+    mutation_counts9 <- c(mutation_counts9, cant_pond9$Suma_Distancias)
+    regions9 <- c(regions9, unique(df_window9$region[1]))
+  }
+}
+
+# Crear un DataFrame con los resultados
+results9 <- data.frame(WindowPOS9 = window_pos9,
+                       MutationCount9 = (mutation_counts9/100),
+                       Region9 = regions9)
+
+
+
+orden_region4 <- c("ORF1ab", "S", "ORF3a", "E", "M", "ORF6", "ORF7a", "ORF7b", "ORF8", "N", "ORF10", "Intergenica")
+
+results9$Region9 <- factor(results9$Region9, levels = orden_region4)
+
+
+posiciones_destacadas <- c(266, 805, 2720, 8555, 10055, 10973, 11843, 12092, 12686, 13025, 13442, 13469, 16237, 18040, 19621, 20659, 21563, 21867, 22097, 22797)
+
+# Filtrar el dataframe no_mask para incluir solo las posiciones destacadas
+no_mask_destacadas1 <- results9 %>% filter(WindowPOS9 %in% posiciones_destacadas)
+
+ggplot(results9, aes(x = WindowPOS9, y = MutationCount9 / 1000, color = Region9)) +
+  geom_point(alpha = 0.5) +
+  geom_line(color = "lightgrey") +
+  labs(x = "Posición", y = "Frecuencia de distancias\n ponderadas diferentes", color = "Region") +
+  ggtitle("Frecuencia de distancias ponderadas diferentes en pacientes tratados con placebo") +
+  theme_bw() +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = c("ORF1ab" = "#148F77", "ORF6" = "#da7b72", "E" = "#C4C4C4", "S" = "#F3A6A0", "M" = "#AA70C2", "N" = "#76448A", "ORF10" = "#8C9AD6", "ORF3a" = "#7EB28F", "ORF7a" = "#F9C185", "ORF7b" = "#FDD899", "ORF8" = "#B03A2E", "Intergenica" = "#A2DED0")) +
+  geom_vline(data = no_mask_destacadas1, aes(xintercept = WindowPOS9), linetype = "dashed", color = "blue") +
+  theme(
+    legend.text = element_text(size = 10),
+    legend.position = "bottom", 
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5), vjust = 1),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"),
+    plot.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0, 0.00025))
+
+```
+
+```{r FIGURA 10C, echo=FALSE}
+
+df_sorted9 <- no_mask12 %>%
+  arrange(POS) %>%
+  filter(TTO == "plasma") %>%
+  group_by(POS, ALT, region) %>%
+  summarise(Suma_Distancias = sum(`Distancia_0-7`, `Distancia_7-28`, `Distancia_0-28`, na.rm = TRUE), .groups = 'drop')
+
+window_size <- 1000
+total_pos <- 31000
+
+# Listas para almacenar los resultados
+window_pos9 <- vector("numeric")
+mutation_counts9 <- vector("numeric")
+regions9 <- vector("character")
+
+for (i in 1:(total_pos - window_size + 1)) {
+  start9 <- i
+  end9 <- i + window_size - 1
+  
+  df_window9 <- df_sorted9 %>% 
+    filter(POS >= start9 & POS <= end9)
+  
+  cant_pond9 <- df_window9 %>%
+    distinct(POS, ALT) %>%
+    summarize(Suma_Distancias = sum(df_window9$Suma_Distancias))
+    
+  if (nrow(cant_pond9) > 0) {
+    window_pos9 <- c(window_pos9, start9)
+    mutation_counts9 <- c(mutation_counts9, cant_pond9$Suma_Distancias)
+    regions9 <- c(regions9, unique(df_window9$region[1]))
+  }
+}
+
+# Crear un DataFrame con los resultados
+results9 <- data.frame(WindowPOS9 = window_pos9,
+                       MutationCount9 = (mutation_counts9/100),
+                       Region9 = regions9)
+
+
+
+orden_region4 <- c("ORF1ab", "S", "ORF3a", "E", "M", "ORF6", "ORF7a", "ORF7b", "ORF8", "N", "ORF10", "Intergenica")
+
+results9$Region9 <- factor(results9$Region9, levels = orden_region4)
+
+
+posiciones_destacadas <- c(266, 805, 2720, 8555, 10055, 10973, 11843, 12092, 12686, 13025, 13442, 13469, 16237, 18040, 19621, 20659, 21563, 21867, 22097, 22797)
+
+# Filtrar el dataframe no_mask para incluir solo las posiciones destacadas
+no_mask_destacadas1 <- results9 %>% filter(WindowPOS9 %in% posiciones_destacadas)
+
+ggplot(results9, aes(x = WindowPOS9, y = MutationCount9 / 1000, color = Region9)) +
+  geom_point(alpha = 0.5) +
+  geom_line(color = "lightgrey") +
+  labs(x = "Posición", y = "Frecuencia de distancias\n ponderadas diferentes", color = "Region") +
+  ggtitle("Frecuencia de distancias ponderadas diferentes en pacientes tratados con plasma") +
+  theme_bw() +
+  scale_y_continuous(labels = percent) +
+  scale_color_manual(values = c("ORF1ab" = "#148F77", "ORF6" = "#da7b72", "E" = "#C4C4C4", "S" = "#F3A6A0", "M" = "#AA70C2", "N" = "#76448A", "ORF10" = "#8C9AD6", "ORF3a" = "#7EB28F", "ORF7a" = "#F9C185", "ORF7b" = "#FDD899", "ORF8" = "#B03A2E", "Intergenica" = "#A2DED0")) +
+  geom_vline(data = no_mask_destacadas1, aes(xintercept = WindowPOS9), linetype = "dashed", color = "blue") +
+  theme(
+    legend.text = element_text(size = 10),
+    legend.position = "bottom", 
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5), vjust = 1),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"),
+    plot.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0, 0.00025))
+
+```
+
+```{r FIGURA 11, echo=FALSE}
+
+heterocigoto <- no_mask12 %>%
+  select(PATIENT_ID, cigoto_0, cigoto_7, cigoto_28) %>%
+  pivot_longer(cols = starts_with("cigoto"), names_to = "PERIODO", values_to = "Cigoto") %>%
+  separate(PERIODO, into = c("cigoto", "PERIODO"), sep = "_", remove = FALSE) %>%
+  mutate(Cigoto = ifelse(Cigoto == "Heterocigoto", 1, 0)) %>%
+  select(PATIENT_ID, PERIODO, Cigoto) %>%
+  na.omit()
+
+# Crear el nuevo dataframe con la suma de los cigotos por paciente y periodo
+heterocigoto_sum <- heterocigoto %>%
+  group_by(PATIENT_ID, PERIODO) %>%
+  summarize(Sum_Cigoto = sum(Cigoto))
+
+heterocigoto_sum <- heterocigoto_sum %>%
+  group_by(PERIODO) %>%
+  mutate(Cantidad_Paciente = n())
+
+heterocigoto_sum$PERIODO <- factor(heterocigoto_sum$PERIODO, levels = c("0", "7", "28"))
+
+muestras_0 <- heterocigoto_sum[heterocigoto_sum$PERIODO == "0", ]
+muestras_7 <- heterocigoto_sum[heterocigoto_sum$PERIODO == "7", ]
+muestras_28 <- heterocigoto_sum[heterocigoto_sum$PERIODO == "28", ]
+
+
+# Realizar el test de Wilcoxon
+wilcox_c0 <- wilcox.test(muestras_7$Sum_Cigoto, muestras_0$Sum_Cigoto)
+p_c0 <- (round(wilcox_c0$p.value, 3))
+
+wilcox_c7 <- wilcox.test(muestras_7$Sum_Cigoto, muestras_28$Sum_Cigoto)
+p_c7 <- (round(wilcox_c7$p.value, 3))
+
+wilcox_c28 <- wilcox.test(muestras_0$Sum_Cigoto, muestras_28$Sum_Cigoto)
+p_c28 <- (round(wilcox_c28$p.value, 3))
+
+
+ggplot(heterocigoto_sum, aes(x = PERIODO, y = Sum_Cigoto, fill = reorder(paste("n =", Cantidad_Paciente), PERIODO))) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("pink", "lightgreen", "#FFFF99"),
+                    labels = c("n = 99", "n = 100", "n = 2"),
+                    breaks = c("n = 99", "n = 100", "n = 2")) +
+  labs(x = "Día", y = "Número de heterocigotos por paciente", title = "Número de heterocigotos por paciente según el día", fill = "Pacientes por Periodo") +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    legend.justification = "right",
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  geom_text(x = 1.5, y = 160, label = paste("p_value =", p_c0), size = 3) +
+  geom_text(x = 2.5, y = 160, label = paste("p_value =", p_c7), size = 3) +
+  geom_text(x = 2, y = 210, label = paste("p_value =", p_c28), size = 3) +
+  geom_segment(aes(x = 1.1, xend = 1.9, y = 150, yend = 150), linetype = "dashed", color = "black") +
+  geom_segment(aes(x = 2.1, xend = 2.9, y = 150, yend = 150), linetype = "dashed", color = "black") +
+  geom_segment(aes(x = 1, xend = 3, y = 200, yend = 200), color = "black") +
+  coord_cartesian(ylim = c(0, 220))
+
+```
+
+```{r FIGURA 12 A y C, echo=FALSE}
+
+columnas_relevantes4 <- c("ct_0", "cigoto_0", "PATIENT_ID")
+df_relevante4 <- no_mask12[columnas_relevantes4]
+df_heterocigotos4 <- df_relevante4[df_relevante4$cigoto_0 == "Heterocigoto", ]
+
+# Obtener la combinación de ct_0, cigoto_0 y PATIENT_ID
+ct_patient <- with(df_heterocigotos4, paste(ct_0, cigoto_0, PATIENT_ID, sep = "-"))
+
+# Contar la frecuencia de cada combinación
+conteo_heterocigotos4 <- table(ct_patient)
+
+# Crear el dataframe bar_het_4 con las columnas ct_0, PATIENT_ID y Cantidad
+bar_het_4 <- data.frame(ct_0 = sapply(strsplit(names(conteo_heterocigotos4), "-"), "[", 1),
+                        cigoto_0 = sapply(strsplit(names(conteo_heterocigotos4), "-"), "[", 2),
+                        PATIENT_ID = sapply(strsplit(names(conteo_heterocigotos4), "-"), "[", 3),
+                        Cantidad = as.vector(conteo_heterocigotos4))
+
+bar_het_4$ct_0 <- as.numeric(as.character(bar_het_4$ct_0))
+bar_het_4 <- na.omit(bar_het_4)
+
+num <- nrow(bar_het_4)
+
+correlation <- cor(bar_het_4$ct_0, bar_het_4$Cantidad, use = "pairwise.complete.obs")
+cor_text <- sprintf("r = %.2f", correlation)
+
+par(mar = c(4, 4, 0.5, 0.5))
+
+ggplot(bar_het_4, aes(x = ct_0, y = Cantidad)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(x = "Ct en Día 0", y = "Nº de heterocigotos", title = "Nº de heterocigotos según la Ct en Día 0") +
+  theme_bw() +
+  theme(
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5)),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  geom_text(label = paste("n =", num), x = 10, y = 105,
+            hjust = 0, vjust = 0, color = "black", size = 4) +
+  annotate("text", label = cor_text, x = 29, y = 2,
+           hjust = 0, vjust = 1, color = "black", size = 4) +
+  coord_cartesian(ylim = c(0, 110))
+```
+
+```{r FIGURA 12 B y D, echo=FALSE}
+columnas_relevantes4 <- c("ct_0", "cigoto_0", "PATIENT_ID")
+df_relevante4 <- no_mask12[columnas_relevantes4]
+df_heterocigotos4 <- df_relevante4[df_relevante4$cigoto_0 == "Heterocigoto", ]
+
+# Obtener la combinación de ct_0, cigoto_0 y PATIENT_ID
+ct_patient <- with(df_heterocigotos4, paste(ct_0, cigoto_0, PATIENT_ID, sep = "-"))
+
+# Contar la frecuencia de cada combinación
+conteo_heterocigotos4 <- table(ct_patient)
+
+# Crear el dataframe bar_het_4 con las columnas ct_0, PATIENT_ID y Cantidad
+bar_het_4 <- data.frame(ct_0 = sapply(strsplit(names(conteo_heterocigotos4), "-"), "[", 1),
+                        cigoto_0 = sapply(strsplit(names(conteo_heterocigotos4), "-"), "[", 2),
+                        PATIENT_ID = sapply(strsplit(names(conteo_heterocigotos4), "-"), "[", 3),
+                        Cantidad = as.vector(conteo_heterocigotos4))
+
+
+bar_het_4$ct_0 <- as.numeric(as.character(bar_het_4$ct_0))
+
+# Crear la columna de Rango
+bar_het_4$Rango <- cut(bar_het_4$ct_0, breaks = c(0, 10, 20, 30, 40), labels = c("(0-10]", "(11-20]", "(21-30]", "(31-40]"), include.lowest = TRUE)
+bar_het_4$Rango <- factor(bar_het_4$Rango, levels = c("(0-10]", "(11-20]", "(21-30]", "(31-40]"))
+
+
+bar_het_4 <- bar_het_4 %>%
+  group_by(Rango) %>%
+  mutate(Cantidad_Filas = n())
+
+
+bar_het_4 <- na.omit(bar_het_4)
+
+muestras_c10 <- bar_het_4[bar_het_4$Rango == "(11-20]", ]
+muestras_c200 <- bar_het_4[bar_het_4$Rango == "(21-30]", ]
+muestras_c300 <- bar_het_4[bar_het_4$Rango == "(31-40]", ]
+
+
+# Realizar el test de Wilcoxon
+wilcox_c01 <- wilcox.test(muestras_c200$Cantidad, muestras_c10$Cantidad)
+p_c01 <- (round(wilcox_c01$p.value, 3))
+
+wilcox_c02 <- wilcox.test(muestras_c200$Cantidad, muestras_c300$Cantidad)
+p_c02 <- (round(wilcox_c02$p.value, 3))
+
+wilcox_c03 <- wilcox.test(muestras_c10$Cantidad, muestras_c300$Cantidad)
+p_c03 <- (round(wilcox_c03$p.value, 3))
+
+par(mar = c(4, 4, 0.5, 0.5))
+
+ggplot(bar_het_4, aes(x = Rango, y = Cantidad)) +
+  geom_boxplot(fill = "lightblue") +
+  geom_text(aes(label = paste("n =", Cantidad_Filas), y = -Inf), vjust = -0.25, size = 3, fontface = "bold") +
+  theme_bw() +
+  labs(x = "Rangos de CT", y = "Nº de heterocigotos", title = "Nº de heterocigotos según la CT en el Día 0") +
+  theme(
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    axis.text.x = element_text(size = 14, hjust = 1),
+    axis.title.x = element_text(size = 14, margin = margin(t = 15, b = 0.5)),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14, margin = margin(r = 15)),
+    plot.title = element_text(margin = margin(t = 0.5, b = 15), size = 14),
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm")
+  ) +
+  geom_text(x = 1.5, y = 98, label = paste("p_value =", p_c01), size = 3) +
+  geom_text(x = 2.5, y = 98, label = paste("p_value =", p_c02), size = 3) +
+  geom_text(x = 2, y = 108, label = paste("p_value =", p_c03), size = 3) +
+  geom_segment(aes(x = 1.1, xend = 1.9, y = 95, yend = 95), linetype = "dashed", color = "black") +
+  geom_segment(aes(x = 2.1, xend = 2.9, y = 95, yend = 95), linetype = "dashed", color = "black") +
+  geom_segment(aes(x = 1, xend = 3, y = 105, yend = 105), color = "black") +
+  coord_cartesian(ylim = c(0, 110))
+
+```
